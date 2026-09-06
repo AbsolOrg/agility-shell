@@ -1,0 +1,186 @@
+/* =============================================================================
+   Agility Shell - Suits (Desktop Presets) Styling
+   ============================================================================= */
+
+/* Bar button */
+.suits-bar-button {
+    transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Applet Popup Switcher Cards */
+.suits-popup-card {
+    border-radius: 10px;
+    padding: 8px 10px;
+    background-color: transparent;
+    border: 1px solid transparent;
+    transition: all 0.15s ease-out;
+}
+
+.suits-popup-card:hover {
+    background-color: alpha(var(--surface_container_high), 0.6);
+    border-color: alpha(var(--outline), 0.12);
+}
+
+.suits-popup-card.active {
+    background-color: alpha(var(--primary_container), 0.25);
+    border-color: alpha(var(--primary), 0.35);
+}
+
+.suits-popup-thumb {
+    border-radius: 6px;
+    border: 1px solid alpha(var(--outline), 0.15);
+}
+
+/* Dash Suits Page Cards */
+.dash-suite-card {
+    border: 1px solid alpha(var(--outline), 0.12);
+    border-radius: 14px;
+    background-color: alpha(var(--surface_container_lowest), 0.85);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+    transition: transform 0.2s cubic-bezier(0.34, 1.2, 0.64, 1), box-shadow 0.2s ease-out, border-color 0.2s ease-out;
+}
+
+.dash-suite-card:hover {
+    border-color: alpha(var(--primary), 0.35);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+}
+
+.dash-suite-card.active {
+    border: 1.5px solid var(--primary);
+    box-shadow: 0 6px 20px alpha(var(--primary), 0.2);
+}
+
+.dash-suite-thumb {
+    border-bottom: 1px solid alpha(var(--outline), 0.1);
+}
+
+/* Action buttons in Dash Suite Card */
+.dash-suite-icon-btn {
+    padding: 4px 6px;
+    border-radius: 6px;
+    background-color: transparent;
+    color: var(--on_surface_variant);
+    transition: all 0.15s ease-out;
+}
+
+.dash-suite-icon-btn:hover {
+    background-color: var(--surface_container_high);
+    color: var(--primary);
+}
+
+.dash-suite-action-btn {
+    padding: 6px 10px;
+    border-radius: 8px;
+    background-color: alpha(var(--surface_container_high), 0.6);
+    border: 1px solid alpha(var(--outline), 0.1);
+    color: var(--on_surface);
+    transition: all 0.15s ease-out;
+}
+
+.dash-suite-action-btn:hover {
+    background-color: var(--surface_container_highest);
+    border-color: alpha(var(--outline), 0.25);
+}
+
+.dash-suite-action-btn.delete-btn:hover {
+    background-color: alpha(var(--error), 0.15);
+    color: var(--error);
+    border-color: alpha(var(--error), 0.3);
+}
+
+.dash-suite-switch-btn {
+    padding: 6px 14px;
+    border-radius: 8px;
+    background-color: var(--primary);
+    color: var(--on_primary);
+    border: none;
+    transition: all 0.2s cubic-bezier(0.34, 1.3, 0.64, 1);
+}
+
+.dash-suite-switch-btn:hover {
+    background-color: alpha(var(--primary), 0.85);
+    box-shadow: 0 2px 10px alpha(var(--primary), 0.35);
+}
+
+.dash-suite-switch-btn.active {
+    background-color: alpha(var(--surface_container_highest), 0.7);
+    color: var(--primary);
+}
+
+/* Material 3 Expressive Avatar */
+.dash-suite-avatar {
+    min-width: 36px;
+    min-height: 36px;
+    border-radius: 18px;
+    background-color: var(--primary_container);
+    color: var(--on_primary_container);
+}
+
+/* Material 3 Apply / Active Pill Button */
+.dash-suite-apply-btn {
+    padding: 7px 20px;
+    border-radius: 18px;
+    background-color: var(--primary);
+    color: var(--on_primary);
+    border: none;
+    font-weight: 600;
+    box-shadow: 0 2px 8px alpha(var(--primary), 0.3);
+    transition: all 0.2s cubic-bezier(0.34, 1.3, 0.64, 1);
+}
+
+.dash-suite-apply-btn:hover {
+    background-color: alpha(var(--primary), 0.85);
+    box-shadow: 0 4px 14px alpha(var(--primary), 0.45);
+}
+
+.dash-suite-apply-btn.active {
+    background-color: alpha(var(--primary), 0.15);
+    color: var(--primary);
+    border: 1px solid alpha(var(--primary), 0.35);
+    box-shadow: none;
+}
+
+.dash-suite-new-btn {
+    padding: 8px 16px;
+    border-radius: 10px;
+    background-color: var(--primary);
+    color: var(--on_primary);
+    border: none;
+    box-shadow: 0 2px 8px alpha(var(--primary), 0.25);
+    transition: all 0.2s cubic-bezier(0.34, 1.3, 0.64, 1);
+}
+
+.dash-suite-new-btn:hover {
+    background-color: alpha(var(--primary), 0.85);
+    box-shadow: 0 4px 14px alpha(var(--primary), 0.4);
+}
+
+.dash-suite-pin-btn {
+    padding: 8px 16px;
+    border-radius: 10px;
+    background-color: alpha(var(--surface_container_high), 0.8);
+    border: 1px solid alpha(var(--outline), 0.15);
+    color: var(--on_surface);
+    transition: all 0.2s cubic-bezier(0.34, 1.3, 0.64, 1);
+}
+
+.dash-suite-pin-btn:hover {
+    background-color: alpha(var(--surface_container_highest), 0.95);
+    border-color: alpha(var(--primary), 0.4);
+    color: var(--primary);
+}
+
+.dash-suite-pinned-btn {
+    padding: 8px 16px;
+    border-radius: 10px;
+    background-color: alpha(var(--primary), 0.15);
+    border: 1px solid alpha(var(--primary), 0.4);
+    color: var(--primary);
+    transition: all 0.2s cubic-bezier(0.34, 1.3, 0.64, 1);
+}
+
+.dash-suite-pinned-btn:hover {
+    background-color: alpha(var(--error), 0.15);
+    border-color: alpha(var(--error), 0.35);
+    color: var(--error);
+}

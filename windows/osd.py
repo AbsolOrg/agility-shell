@@ -263,6 +263,7 @@ class OSD(WaylandWindow):
         self.battery_icon = OSDIcon(icon_name="battery-charging-duotone", label_text="Charging")
         self.battery_low_icon = OSDIcon(icon_name="battery-low-duotone", label_text="Low Battery")
         self.battery_critical_icon = OSDIcon(icon_name="battery-warning-duotone", label_text="Critical!")
+        self.suits_icon = OSDIcon(icon_name="suits-duotone", label_text="")
 
         self.revealer = DashReveal(
             open_duration=0.15,
@@ -282,7 +283,8 @@ class OSD(WaylandWindow):
                 self.update_widget,
                 self.battery_icon,
                 self.battery_low_icon,
-                self.battery_critical_icon
+                self.battery_critical_icon,
+                self.suits_icon,
             ]),
         )
 
@@ -402,14 +404,20 @@ class OSD(WaylandWindow):
         if bar.is_applet_open("Settings"):
             return
         if self._monitor_connector == wm.active_output:
-            for child in [self.volume_bar, self.brightness_bar, self.layout_icon, self.alarm_icon, self.update_widget, self.battery_icon, self.battery_low_icon, self.battery_critical_icon]:
-                child.set_visible(child is widget)
+            for child in [self.volume_bar, self.brightness_bar, self.layout_icon, self.alarm_icon, self.update_widget, self.battery_icon, self.battery_low_icon, self.battery_critical_icon, getattr(self, "suits_icon", None)]:
+                if child:
+                    child.set_visible(child is widget)
 
             if not self.is_visible():
                 self.set_visible(True)
                 self.revealer.open()
 
             self._reset_timer()
+
+    def show_suits_switch(self, name: str):
+        if hasattr(self, "suits_icon"):
+            self.suits_icon.set_label(f"Switched to {name}")
+            self._show_only(self.suits_icon)
 
     def _reset_timer(self):
         if self._hide_timer:

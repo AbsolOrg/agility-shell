@@ -24,9 +24,11 @@ from .clipboard import ClipboardButton
 from .caffeine import CaffeineButton
 from .sysmon import SysMonButton
 from .nightlight import NightLightButton
+from .suits import SuitsButton
 from .base import BaseButton, StatButton, ProgressButton
 
 __all__ = [
+    "SuitsButton",
     "NiriClientTitle",
     "BatteryButton",
     "BrightnessButton",

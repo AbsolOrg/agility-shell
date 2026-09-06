@@ -44,13 +44,14 @@ WIDGET_ICONS: dict[str, str] = {
     "NightLight":    "moon-stars-duotone",
     "Workspaces":    "stack-duotone",
     "Focused":       "text-t-duotone",
+    "Suits":         "suits-duotone",
 }
 
 ALL_AVAILABLE_WIDGETS: list[str] = [
     "Dash", "Launcher", "SysMon", "Processes", "Clipboard", "Caffeine", "NightLight",
     "Media", "Weather", "Volume", "Brightness", "Energy", "Wifi", "Bluetooth",
     "Clock", "Calendar", "Notifications", "Settings", "Tray", "Dock", "Workspaces",
-    "Calculator", "Keyboard", "Screenshot", "Session", "Focused"
+    "Calculator", "Keyboard", "Screenshot", "Session", "Focused", "Suits"
 ]
 
 
@@ -1535,7 +1536,7 @@ class DashSettingsPage(Box):
 
         categories = {
             "System & Controls": ["SysMon", "Processes", "Volume", "Brightness", "Energy", "Wifi", "Bluetooth", "NightLight", "Caffeine"],
-            "Navigation & Apps": ["Dash", "Launcher", "Workspaces", "Dock", "Focused"],
+            "Navigation & Apps": ["Dash", "Launcher", "Workspaces", "Dock", "Focused", "Suits"],
             "Tools & Utilities": ["Clock", "Calendar", "Weather", "Media", "Notifications", "Clipboard", "Calculator", "Keyboard", "Screenshot", "Settings", "Tray", "Session"],
         }
 
