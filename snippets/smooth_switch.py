@@ -21,11 +21,10 @@ class SmoothSwitch(Gtk.DrawingArea):
         **kwargs,
     ):
         super().__init__(**kwargs)
-        self._active = active
+        self._active = bool(active)
         self._width = width
         self._height = height
         self._on_user_toggle = on_user_toggle
-        self._anim_value = 1.0 if active else 0.0
 
         self.set_size_request(width, height)
         self.set_hexpand(h_expand)
@@ -41,18 +40,24 @@ class SmoothSwitch(Gtk.DrawingArea):
                 }[v_align]
             self.set_valign(v_align)
 
+        ctx = self.get_style_context()
+        ctx.add_class("smooth-switch")
         if style_classes:
-            ctx = self.get_style_context()
             for cls in style_classes:
                 ctx.add_class(cls)
 
+        if self._active:
+            ctx.add_class("checked")
+
+        init_val = 1.0 if self._active else 0.0
         self._animator = Animator(
             bezier_curve=(0.2, 0.6, 0.8, 1.0),
             duration=0.2,
-            min_value=0.0,
-            max_value=1.0,
+            min_value=init_val,
+            max_value=init_val,
             tick_widget=self,
         )
+        self._animator.value = init_val
         self._animator.connect("notify::value", lambda *_: self.queue_draw())
 
         self.add_events(
@@ -62,19 +67,45 @@ class SmoothSwitch(Gtk.DrawingArea):
         )
         self.connect("button-press-event", self._on_click)
         self.connect("draw", self._on_draw)
-        self.connect("enter-notify-event", lambda *_: self.queue_draw())
-        self.connect("leave-notify-event", lambda *_: self.queue_draw())
+        self.connect("enter-notify-event", self._on_enter)
+        self.connect("leave-notify-event", self._on_leave)
         self.show_all()
+
+    def _on_enter(self, *_):
+        window = self.get_window()
+        if window:
+            cursor = Gdk.Cursor.new_from_name(window.get_display(), "pointer")
+            window.set_cursor(cursor)
+        self.queue_draw()
+
+    def _on_leave(self, *_):
+        window = self.get_window()
+        if window:
+            window.set_cursor(None)
+        self.queue_draw()
 
     def get_active(self) -> bool:
         return self._active
 
     def set_active(self, value: bool):
         """Programmatic set — does NOT emit user-toggled."""
+        value = bool(value)
+        target = 1.0 if value else 0.0
         if value == self._active:
+            if self._animator.value != target:
+                self._animator.value = target
+                self._animator.min_value = target
+                self._animator.max_value = target
+                self.queue_draw()
             return
         self._active = value
-        self._animate_to(1.0 if value else 0.0)
+        if not self.get_mapped():
+            self._animator.value = target
+            self._animator.min_value = target
+            self._animator.max_value = target
+            self.queue_draw()
+            return
+        self._animate_to(target)
 
     def _on_click(self, _, event):
         if event.button != 1:
@@ -93,51 +124,81 @@ class SmoothSwitch(Gtk.DrawingArea):
         self._animator.play()
 
     def _on_draw(self, _, cr: cairo.Context):
-        w, h = self._width, self._height
-        r = h / 2
-        margin = 2
-        t = self._animator.value
+        alloc = self.get_allocation()
+        w = alloc.width if alloc.width > 0 else self._width
+        h = alloc.height if alloc.height > 0 else self._height
+        r = h / 2.0
+        margin = 2.5
+        t = max(0.0, min(1.0, float(self._animator.value)))
 
         style = self.get_style_context()
 
-        if self._active or t > 0.0:
-            style.add_class("checked")
-        else:
+        # Query OFF state colors
+        had_checked = style.has_class("checked")
+        if had_checked:
+            style.remove_class("checked")
+        off_bg = style.get_background_color(Gtk.StateFlags.NORMAL)
+        off_fg = style.get_color(Gtk.StateFlags.NORMAL)
+
+        # Query ON state colors
+        style.add_class("checked")
+        on_bg = style.get_background_color(Gtk.StateFlags.NORMAL)
+        on_fg = style.get_color(Gtk.StateFlags.NORMAL)
+
+        # Restore style class state
+        if not self._active and t <= 0.0:
             style.remove_class("checked")
 
-        off_color = style.get_background_color(Gtk.StateFlags.NORMAL)
+        # Robust fallbacks if CSS returned transparent / unstyled
+        if off_bg.alpha < 0.05:
+            off_bg = Gdk.RGBA(0.18, 0.19, 0.23, 1.0)
+        if on_bg.alpha < 0.05:
+            on_bg = Gdk.RGBA(0.55, 0.34, 0.75, 1.0)
+        if off_fg.alpha < 0.05:
+            off_fg = Gdk.RGBA(0.75, 0.77, 0.82, 1.0)
+        if on_fg.alpha < 0.05:
+            on_fg = Gdk.RGBA(1.0, 1.0, 1.0, 1.0)
 
-        on_color  = style.get_background_color(Gtk.StateFlags.CHECKED)
+        track_r = off_bg.red   + (on_bg.red   - off_bg.red)   * t
+        track_g = off_bg.green + (on_bg.green - off_bg.green) * t
+        track_b = off_bg.blue  + (on_bg.blue  - off_bg.blue)  * t
+        track_a = off_bg.alpha + (on_bg.alpha - off_bg.alpha) * t
 
-        if self._active or t > 0.5:
-            thumb_color = style.get_color(Gtk.StateFlags.CHECKED)
-        else:
-            thumb_color = style.get_color(Gtk.StateFlags.NORMAL)
-
-        track_r = off_color.red   + (on_color.red   - off_color.red)   * t
-        track_g = off_color.green + (on_color.green - off_color.green) * t
-        track_b = off_color.blue  + (on_color.blue  - off_color.blue)  * t
-        track_a = off_color.alpha + (on_color.alpha - off_color.alpha) * t
-
+        # Draw switch track capsule
         cr.new_sub_path()
         cr.arc(r,     r, r, 0.5 * 3.14159, 1.5 * 3.14159)
         cr.arc(w - r, r, r, -0.5 * 3.14159, 0.5 * 3.14159)
         cr.close_path()
         cr.set_source_rgba(track_r, track_g, track_b, track_a)
-        cr.fill()
+        cr.fill_preserve()
 
+        # Track border outline for contrast (especially when off)
+        outline_alpha = 0.20 * (1.0 - t) + 0.10 * t
+        cr.set_source_rgba(1.0, 1.0, 1.0, outline_alpha)
+        cr.set_line_width(1.0)
+        cr.stroke()
+
+        # Thumb metrics
         thumb_r = r - margin
-        travel  = w - 2 * r
+        travel  = w - 2.0 * r
         thumb_x = r + travel * t
         thumb_y = r
 
+        # Thumb drop shadow
+        cr.save()
+        cr.arc(thumb_x, thumb_y + 1.0, thumb_r, 0, 2 * 3.14159)
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.28)
+        cr.fill()
+        cr.restore()
+
+        # Thumb body
+        thumb_r_c = off_fg.red   + (on_fg.red   - off_fg.red)   * t
+        thumb_g_c = off_fg.green + (on_fg.green - off_fg.green) * t
+        thumb_b_c = off_fg.blue  + (on_fg.blue  - off_fg.blue)  * t
+        thumb_a_c = off_fg.alpha + (on_fg.alpha - off_fg.alpha) * t
+
         cr.arc(thumb_x, thumb_y, thumb_r, 0, 2 * 3.14159)
-        cr.set_source_rgba(
-            thumb_color.red,
-            thumb_color.green,
-            thumb_color.blue,
-            thumb_color.alpha,
-        )
+        cr.set_source_rgba(thumb_r_c, thumb_g_c, thumb_b_c, thumb_a_c)
         cr.fill()
 
         return False

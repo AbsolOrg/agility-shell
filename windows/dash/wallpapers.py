@@ -13,13 +13,14 @@ from fabric.widgets.button import Button
 from fabric.widgets.image import Image
 from fabric.widgets.label import Label
 from fabric.widgets.centerbox import CenterBox
-from gi.repository import GdkPixbuf, GLib, Gio
+from gi.repository import GdkPixbuf, GLib, Gio, Gtk, Gdk
 from snippets import Icon, ClippingScrolledWindow, ClippingBox, SmoothSwitch
 from services.themes import wallpaper
 from user_options import user_options
 from PIL import Image as PilImage
 
-THUMBNAIL_SIZE = 140
+THUMBNAIL_WIDTH  = 205
+THUMBNAIL_HEIGHT = 115
 SUPPORTED_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
 
 PREVIEW_WIDTH  = 540
@@ -53,7 +54,7 @@ PREVIEW_CACHE_DIR = Path.home() / ".cache" / "agility-shell" / "previews"
 
 def _fast_cache_key(path: str) -> str:
     stat = os.stat(path)
-    raw  = f"{path}:{stat.st_mtime}:{stat.st_size}:v3_compact"
+    raw  = f"{path}:{stat.st_mtime}:{stat.st_size}:v4_wide_205_115"
     return hashlib.sha256(raw.encode()).hexdigest()
 
 def _get_thumb_cache_path(file_path: str) -> Path:
@@ -62,23 +63,31 @@ def _get_thumb_cache_path(file_path: str) -> Path:
 def _get_preview_cache_path(file_path: str) -> Path:
     return PREVIEW_CACHE_DIR / f"{_fast_cache_key(file_path)}.jpg"
 
-def _generate_thumb_to_cache(file_path: str, size: int) -> Path | None:
+def _generate_thumb_to_cache(file_path: str, width: int = THUMBNAIL_WIDTH, height: int = THUMBNAIL_HEIGHT) -> Path | None:
     try:
         THUMB_CACHE_DIR.mkdir(parents=True, exist_ok=True)
         cache_path = _get_thumb_cache_path(file_path)
         if not cache_path.exists():
             with PilImage.open(file_path) as img:
-
                 if hasattr(img, "draft"):
-                    img.draft("RGB", (size * 2, size * 2))
+                    img.draft("RGB", (width * 2, height * 2))
                 if img.mode != "RGB":
                     img = img.convert("RGB")
-                w, h  = img.size
-                side  = min(w, h)
-                left  = (w - side) // 2
-                top   = (h - side) // 2
-                thumb = img.crop((left, top, left + side, top + side)).resize(
-                    (size, size), PilImage.Resampling.LANCZOS
+                img_w, img_h = img.size
+                target_ratio = width / height
+                img_ratio = img_w / img_h
+                if img_ratio > target_ratio:
+                    crop_w = int(img_h * target_ratio)
+                    crop_h = img_h
+                    left = (img_w - crop_w) // 2
+                    top = 0
+                else:
+                    crop_w = img_w
+                    crop_h = int(img_w / target_ratio)
+                    left = 0
+                    top = (img_h - crop_h) // 2
+                thumb = img.crop((left, top, left + crop_w, top + crop_h)).resize(
+                    (width, height), PilImage.Resampling.LANCZOS
                 )
                 thumb.save(cache_path, "JPEG", quality=85, optimize=True)
                 del thumb
@@ -129,7 +138,7 @@ class SelectorHeader(CenterBox):
 class WallpaperThumb(Button):
     """
     Memory contract:
-    - The executor work() closure captures only: path (str), size (int),
+    - The executor work() closure captures only: path (str), size (int, int),
       generation (int), and a weakref to self.
     - self is never captured directly — if the widget is destroyed or unloaded
       before the job finishes, the weakref returns None and the result is dropped.
@@ -144,16 +153,37 @@ class WallpaperThumb(Button):
         self._future: Future | None = None
 
         self.image = Image()
-        self.box = ClippingBox(
-            style_classes=["dash-grid-selector-preview"],
+        self.clip_box = ClippingBox(
+            style_classes=["wallpaper-thumb-clip"],
             children=self.image,
         )
+        self.clip_box.set_size_request(THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT)
+
+        self._badge = Box(
+            style_classes=["wallpaper-thumb-badge"],
+            orientation="h",
+            spacing=3,
+            h_align="end",
+            v_align="start",
+            visible=False,
+            children=[
+                Icon(icon_name="check-duotone", icon_size=10),
+                Label(label="Active", style="font-size: 8.5px; font-weight: 700;"),
+            ],
+        )
+
+        overlay = Gtk.Overlay()
+        overlay.add(self.clip_box)
+        overlay.add_overlay(self._badge)
+
         super().__init__(
             style_classes=["wallpaper-thumb"],
-            child=self.box,
+            child=overlay,
             on_clicked=lambda _: on_select(self),
         )
-        self.set_size_request(THUMBNAIL_SIZE, THUMBNAIL_SIZE)
+        self.set_size_request(THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT)
+        base_name = os.path.splitext(os.path.basename(path))[0].replace("_", " ").replace("-", " ")
+        self.set_tooltip_text(base_name.title())
 
     def load(self, executor: ThreadPoolExecutor) -> None:
         if self._loaded:
@@ -166,7 +196,7 @@ class WallpaperThumb(Button):
         ref  = weakref.ref(self)
 
         def work():
-            cache_path = _generate_thumb_to_cache(path, THUMBNAIL_SIZE)
+            cache_path = _generate_thumb_to_cache(path, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT)
             if cache_path is None:
                 return
             pixbuf = _load_pixbuf_from_path(cache_path)
@@ -203,8 +233,10 @@ class WallpaperThumb(Button):
     def set_active(self, active: bool) -> None:
         if active:
             self.add_style_class("active")
+            self._badge.set_visible(True)
         else:
             self.remove_style_class("active")
+            self._badge.set_visible(False)
 
 class DashSelectorPage(Box):
     def __init__(self):
@@ -216,27 +248,39 @@ class DashSelectorPage(Box):
             h_expand=False,
         )
         self._preview_box.set_size_request(PREVIEW_WIDTH, PREVIEW_HEIGHT)
-        self._thumb_strip = Box(
-            orientation="v",
-            spacing=10,
-            style_classes=["wallpaper-thumb-strip"],
-        )
-        self._scroll = ClippingScrolledWindow(
-            v_expand=True,
-            style_classes=["grid-selector-thumb-scroll"],
-            max_content_size=(THUMBNAIL_SIZE, 490),
-            fade_distance=40,
-            child=self._thumb_strip,
-            overlay_scroll=True,
-            kinetic_scroll=True,
-        )
+
         self._preview_column = Box(
             orientation="v",
             spacing=8,
             h_align="center",
             v_align="start",
-            children=[self._preview_box],
+            children=[],
         )
+
+        self._thumb_grid = Gtk.Grid()
+        self._thumb_grid.set_column_spacing(10)
+        self._thumb_grid.set_row_spacing(10)
+        self._thumb_grid.set_halign(Gtk.Align.CENTER)
+        self._thumb_grid.set_valign(Gtk.Align.START)
+
+        self._scroll = ClippingScrolledWindow(
+            v_expand=True,
+            style_classes=["grid-selector-thumb-scroll"],
+            max_content_size=(445, 520),
+            fade_distance=30,
+            child=self._thumb_grid,
+            overlay_scroll=True,
+            kinetic_scroll=True,
+        )
+
+        self._gallery_column = Box(
+            orientation="v",
+            spacing=6,
+            h_align="center",
+            v_align="start",
+            v_expand=True,
+        )
+
         super().__init__(
             orientation="v",
             v_align="start",
@@ -247,12 +291,12 @@ class DashSelectorPage(Box):
             children=[
                 Box(
                     orientation="h",
-                    spacing=16,
+                    spacing=20,
                     h_align="center",
                     v_align="start",
                     h_expand=True,
                     v_expand=True,
-                    children=[self._preview_column, self._scroll],
+                    children=[self._preview_column, self._gallery_column],
                 ),
             ],
         )
@@ -269,7 +313,8 @@ class DashWallpaperPage(DashSelectorPage):
     def __init__(self):
         super().__init__()
 
-        self._executor                    = ThreadPoolExecutor(max_workers=1)
+        self._executor                    = ThreadPoolExecutor(max_workers=2)
+        self._all_thumbs: list[WallpaperThumb] = []
         self._active_thumb: WallpaperThumb | None = None
         self._preview_generation          = 0
         self._preview_future: Future | None = None
@@ -277,7 +322,88 @@ class DashWallpaperPage(DashSelectorPage):
         self._preview_image = Image()
         self._preview_box.add(self._preview_image)
 
-        # Transition Selector Rows (2 compact rows)
+        # 1. Preview Header with Active Wallpaper Info & Quick Actions
+        self._preview_name_label = Label(
+            label="Active Wallpaper",
+            style="font-size: 11.5px; font-weight: 700;",
+            ellipsization="end",
+            max_chars_width=20,
+        )
+        self._active_status_pill = Box(
+            orientation="h",
+            spacing=4,
+            style_classes=["wallpaper-badge"],
+            v_align="center",
+            children=[
+                Icon(icon_name="check-circle-duotone", icon_size=11),
+                Label(label="Active", style="font-size: 9px; font-weight: 700;"),
+            ],
+        )
+
+        self._random_btn = Button(
+            style_classes=["wallpaper-action-btn"],
+            child=Box(
+                orientation="h",
+                spacing=4,
+                children=[
+                    Icon(icon_name="shuffle-duotone", icon_size=12),
+                    Label(label="Random (Alt+X)", style="font-size: 10px; font-weight: 600;"),
+                ],
+            ),
+            on_clicked=self._on_random_clicked,
+        )
+        self._random_btn.set_tooltip_text("Switch to a random wallpaper (Alt+X)")
+
+        self._switcher_btn = Button(
+            style_classes=["wallpaper-action-btn"],
+            child=Box(
+                orientation="h",
+                spacing=4,
+                children=[
+                    Icon(icon_name="browsers-duotone", icon_size=12),
+                    Label(label="Switcher (Alt+C)", style="font-size: 10px; font-weight: 600;"),
+                ],
+            ),
+            on_clicked=self._on_switcher_clicked,
+        )
+        self._switcher_btn.set_tooltip_text("Open wallpaper switcher overlay (Alt+C)")
+
+        preview_header = CenterBox(
+            orientation="h",
+            style_classes=["wallpaper-preview-header"],
+            h_expand=True,
+            start_children=Box(
+                orientation="h",
+                spacing=8,
+                v_align="center",
+                children=[
+                    Icon(icon_name="image-duotone", icon_size=14),
+                    self._preview_name_label,
+                    self._active_status_pill,
+                ],
+            ),
+            end_children=Box(
+                orientation="h",
+                spacing=6,
+                v_align="center",
+                children=[
+                    self._random_btn,
+                    self._switcher_btn,
+                ],
+            ),
+        )
+
+        preview_card = Box(
+            orientation="v",
+            spacing=6,
+            style_classes=["wallpaper-preview-container"],
+            children=[
+                preview_header,
+                self._preview_box,
+            ],
+        )
+
+        # 2. Transition Selector Rows (2 compact rows)
         self._transition_buttons: dict[str, Button] = {}
         self._trans_row_1 = Box(
             orientation="h",
@@ -305,24 +431,18 @@ class DashWallpaperPage(DashSelectorPage):
             on_clicked=lambda *_: self._toggle_custom_creator(),
         )
 
-        trans_header = Box(
+        trans_header = CenterBox(
             orientation="h",
-            spacing=6,
-            v_align="center",
-            children=[
-                Icon(icon_name="sparkle-duotone", icon_size=13),
-                Label(label="Transitions:", style="font-size: 11px; font-weight: 700; opacity: 0.9;"),
-            ],
-        )
-
-        trans_box = Box(
-            orientation="v",
-            spacing=4,
-            h_align="center",
-            children=[
-                self._trans_row_1,
-                self._trans_row_2,
-            ],
+            h_expand=True,
+            start_children=Box(
+                orientation="h",
+                spacing=6,
+                v_align="center",
+                children=[
+                    Icon(icon_name="sparkle-duotone", icon_size=13),
+                    Label(label="Transition Effects", style="font-size: 11px; font-weight: 700;"),
+                ],
+            ),
         )
 
         # Switching Speed Selector Pills
@@ -359,12 +479,23 @@ class DashWallpaperPage(DashSelectorPage):
             v_align="center",
             children=[
                 Icon(icon_name="gauge-duotone", icon_size=13),
-                Label(label="Speed:", style="font-size: 11px; font-weight: 600; opacity: 0.8;"),
+                Label(label="Speed:", style="font-size: 11px; font-weight: 600; opacity: 0.85;"),
                 self._speed_row,
             ],
         )
 
-        # Alt+C Switcher Style Selector Pills (5 styles)
+        self._trans_card = Box(
+            orientation="v",
+            spacing=6,
+            style_classes=["wallpaper-settings-card"],
+            children=[
+                trans_header,
+                Box(orientation="v", spacing=3, h_align="center", children=[self._trans_row_1, self._trans_row_2]),
+                speed_row_box,
+            ],
+        )
+
+        # 3. Alt+C Switcher Style & Hotkey Animations Card
         self._style_buttons: dict[str, Button] = {}
         self._style_row = Box(
             orientation="h",
@@ -394,13 +525,22 @@ class DashWallpaperPage(DashSelectorPage):
             self._style_buttons[st_key] = btn
             self._style_row.add(btn)
 
+        switcher_header = Box(
+            orientation="h",
+            spacing=6,
+            v_align="center",
+            children=[
+                Icon(icon_name="layout-duotone", icon_size=13),
+                Label(label="Switcher & Hotkeys", style="font-size: 11px; font-weight: 700;"),
+            ],
+        )
+
         style_row_box = Box(
             orientation="h",
             spacing=8,
             v_align="center",
             children=[
-                Icon(icon_name="layout-duotone", icon_size=13),
-                Label(label="Alt+C Style:", style="font-size: 11px; font-weight: 600; opacity: 0.8;"),
+                Label(label="Alt+C Style:", style="font-size: 11px; font-weight: 600; opacity: 0.85;"),
                 self._style_row,
             ],
         )
@@ -408,7 +548,11 @@ class DashWallpaperPage(DashSelectorPage):
         # Hotkey Animations Switch
         self._anim_switch = SmoothSwitch(
             active=getattr(user_options.wallpaper, "hotkey_animations", True),
+            style_classes=["dash-switch"],
             on_user_toggle=self._on_hotkey_anim_toggled,
+            width=46,
+            height=24,
+            v_align="center",
         )
 
         hotkey_anim_row = Box(
@@ -417,21 +561,26 @@ class DashWallpaperPage(DashSelectorPage):
             v_align="center",
             children=[
                 Icon(icon_name="film-strip-duotone", icon_size=13),
-                Label(label="Hotkey Animations (Alt+C / Alt+X):", style="font-size: 11px; font-weight: 600; opacity: 0.8;"),
+                Box(
+                    orientation="v",
+                    spacing=1,
+                    v_align="center",
+                    children=[
+                        Label(label="Hotkey Animations", style="font-size: 11px; font-weight: 600;", h_align="start"),
+                        Label(label="Smooth transitions on Alt+C & Alt+X", style="font-size: 9.5px; opacity: 0.6;", h_align="start"),
+                    ],
+                ),
                 Box(h_expand=True),
                 self._anim_switch,
             ],
         )
 
-        # Grouped Settings Card
-        self._settings_card = Box(
+        self._switcher_card = Box(
             orientation="v",
-            spacing=7,
+            spacing=6,
             style_classes=["wallpaper-settings-card"],
             children=[
-                trans_header,
-                trans_box,
-                speed_row_box,
+                switcher_header,
                 style_row_box,
                 hotkey_anim_row,
             ],
@@ -442,8 +591,56 @@ class DashWallpaperPage(DashSelectorPage):
         self._creator_card.set_no_show_all(True)
         self._creator_card.hide()
 
-        self._preview_column.add(self._settings_card)
+        # Add to Preview Column
+        self._preview_column.add(preview_card)
+        self._preview_column.add(self._trans_card)
+        self._preview_column.add(self._switcher_card)
         self._preview_column.add(self._creator_card)
+
+        # 4. Right Gallery Column Header
+        self._count_badge = Label(
+            label="0 Wallpapers",
+            style_classes=["wallpaper-badge"],
+            v_align="center",
+        )
+        self._open_folder_btn = Button(
+            style_classes=["wallpaper-action-btn"],
+            child=Box(
+                orientation="h",
+                spacing=4,
+                children=[
+                    Icon(icon_name="folder-simple-duotone", icon_size=12),
+                    Label(label="Open Folder", style="font-size: 10px; font-weight: 600;"),
+                ],
+            ),
+            on_clicked=self._on_open_folder_clicked,
+        )
+        self._open_folder_btn.set_tooltip_text("Open wallpapers folder in file manager")
+
+        library_header = CenterBox(
+            orientation="h",
+            style_classes=["wallpaper-library-header"],
+            h_expand=True,
+            start_children=Box(
+                orientation="h",
+                spacing=8,
+                v_align="center",
+                children=[
+                    Icon(icon_name="images-duotone", icon_size=15),
+                    Label(label="Wallpaper Library", style="font-size: 12px; font-weight: 700;"),
+                    self._count_badge,
+                ],
+            ),
+            end_children=Box(
+                orientation="h",
+                spacing=6,
+                v_align="center",
+                children=[self._open_folder_btn],
+            ),
+        )
+
+        self._gallery_column.add(library_header)
+        self._gallery_column.add(self._scroll)
 
         self._rebuild_transition_buttons()
 
@@ -764,7 +961,7 @@ class DashWallpaperPage(DashSelectorPage):
             self._on_became_hidden()
 
     def _on_became_visible(self) -> None:
-        if not self._thumb_strip.get_children():
+        if not self._all_thumbs:
             self._load_wallpapers()
             if wallpaper.wallpaper_path:
                 self._restore_active(wallpaper.wallpaper_path)
@@ -793,11 +990,20 @@ class DashWallpaperPage(DashSelectorPage):
 
     def _unload_all_thumbs(self) -> None:
         self._cancel_preview()
-        for thumb in self._thumb_strip.get_children():
-            if isinstance(thumb, WallpaperThumb):
-                thumb.unload()
+        for thumb in self._all_thumbs:
+            thumb.unload()
         self._active_thumb = None
         self._preview_image.set_from_pixbuf(None)
+
+    def _rebuild_grid(self) -> None:
+        self._thumb_grid.foreach(lambda widget: self._thumb_grid.remove(widget))
+        for i, thumb in enumerate(self._all_thumbs):
+            col = i % 2
+            row = i // 2
+            self._thumb_grid.attach(thumb, col, row, 1, 1)
+        self._thumb_grid.show_all()
+        if hasattr(self, "_count_badge"):
+            self._count_badge.set_label(f"{len(self._all_thumbs)} Wallpapers")
 
     def _load_wallpapers(self) -> None:
         walls_dir = os.path.expanduser("~/.config/agility-shell/wallpapers")
@@ -811,15 +1017,14 @@ class DashWallpaperPage(DashSelectorPage):
                 if f.lower().endswith(SUPPORTED_EXTS)
             )
             def apply():
-                for path in paths:
-                    thumb = WallpaperThumb(path, self._on_thumb_clicked)
-                    self._thumb_strip.add(thumb)
-                self._thumb_strip.show_all()
+                self._all_thumbs = [WallpaperThumb(path, self._on_thumb_clicked) for path in paths]
+                self._rebuild_grid()
                 adj = self._scroll.get_vadjustment()
                 adj.connect("value-changed", self._on_scroll_changed)
                 GLib.idle_add(self._on_scroll_changed, adj)
-                self._walls_monitor = monitor_file(walls_dir)
-                self._walls_monitor.connect("changed", self._on_dir_changed)
+                if not hasattr(self, "_walls_monitor"):
+                    self._walls_monitor = monitor_file(walls_dir)
+                    self._walls_monitor.connect("changed", self._on_dir_changed)
             GLib.idle_add(apply)
 
         threading.Thread(target=load, daemon=True).start()
@@ -836,28 +1041,26 @@ class DashWallpaperPage(DashSelectorPage):
     def _on_scroll_changed(self, adj) -> None:
         visible_start = adj.get_value()
         visible_end   = visible_start + adj.get_page_size()
-        buffer        = THUMBNAIL_SIZE * 2
+        buffer        = THUMBNAIL_HEIGHT * 2
 
-        y = 0
-        for thumb in self._thumb_strip.get_children():
-            if not isinstance(thumb, WallpaperThumb):
-                continue
+        for i, thumb in enumerate(self._all_thumbs):
+            row = i // 2
+            y   = row * (THUMBNAIL_HEIGHT + 10)
             in_view = (
-                y + THUMBNAIL_SIZE >= visible_start - buffer and
-                y                  <= visible_end   + buffer
+                y + THUMBNAIL_HEIGHT >= visible_start - buffer and
+                y                    <= visible_end   + buffer
             )
             if in_view:
                 thumb.load(self._executor)
             else:
                 thumb.unload()
-            y += THUMBNAIL_SIZE + 8
 
     def _on_thumb_clicked(self, thumb: WallpaperThumb) -> None:
         self._set_active(thumb)
         wallpaper.set_wallpaper(thumb.path, transition_type=user_options.wallpaper.transition_type)
 
     def _set_active(self, thumb: WallpaperThumb) -> None:
-        if self._active_thumb:
+        if self._active_thumb and self._active_thumb != thumb:
             self._active_thumb.set_active(False)
         self._active_thumb = thumb
         thumb.set_active(True)
@@ -865,9 +1068,9 @@ class DashWallpaperPage(DashSelectorPage):
 
     def _restore_active(self, path: str) -> None:
         self._update_preview(path)
-        for thumb in self._thumb_strip.get_children():
-            if isinstance(thumb, WallpaperThumb) and thumb.path == path:
-                if self._active_thumb:
+        for thumb in self._all_thumbs:
+            if thumb.path == path:
+                if self._active_thumb and self._active_thumb != thumb:
                     self._active_thumb.set_active(False)
                 self._active_thumb = thumb
                 thumb.set_active(True)
@@ -878,7 +1081,20 @@ class DashWallpaperPage(DashSelectorPage):
         self._preview_generation += 1
 
         if path is None:
+            if hasattr(self, "_preview_name_label"):
+                self._preview_name_label.set_label("No Wallpaper Selected")
+                self._preview_name_label.set_tooltip_text("")
+            if hasattr(self, "_active_status_pill"):
+                self._active_status_pill.set_visible(False)
+            self._preview_image.set_from_pixbuf(None)
             return
+
+        if hasattr(self, "_preview_name_label"):
+            clean_name = os.path.splitext(os.path.basename(path))[0].replace("_", " ").replace("-", " ")
+            self._preview_name_label.set_label(clean_name.title())
+            self._preview_name_label.set_tooltip_text(os.path.basename(path))
+        if hasattr(self, "_active_status_pill"):
+            self._active_status_pill.set_visible(True)
 
         gen = self._preview_generation
         ref = weakref.ref(self)
@@ -894,10 +1110,8 @@ class DashWallpaperPage(DashSelectorPage):
             def apply():
                 page = ref()
                 if page is None or gen != page._preview_generation:
-
                     return GLib.SOURCE_REMOVE
                 page._preview_image.set_from_pixbuf(pixbuf)
-
                 return GLib.SOURCE_REMOVE
 
             GLib.idle_add(apply)
@@ -905,25 +1119,45 @@ class DashWallpaperPage(DashSelectorPage):
         self._preview_future = self._executor.submit(load)
 
     def _add_thumb(self, path: str) -> None:
-        existing = [
-            t.path for t in self._thumb_strip.get_children()
-            if isinstance(t, WallpaperThumb)
-        ]
+        existing = [t.path for t in self._all_thumbs]
         if path in existing:
             return
-        thumb     = WallpaperThumb(path, self._on_thumb_clicked)
-        all_paths = sorted(existing + [path])
-        index     = all_paths.index(path)
-        self._thumb_strip.pack_start(thumb, False, False, 0)
-        self._thumb_strip.reorder_child(thumb, index)
-        thumb.show_all()
-        thumb.load(self._executor)
+        thumb = WallpaperThumb(path, self._on_thumb_clicked)
+        self._all_thumbs.append(thumb)
+        self._all_thumbs.sort(key=lambda t: t.path)
+        self._rebuild_grid()
+        self._on_scroll_changed(self._scroll.get_vadjustment())
 
     def _remove_thumb(self, path: str) -> None:
-        for thumb in self._thumb_strip.get_children():
-            if isinstance(thumb, WallpaperThumb) and thumb.path == path:
-                if self._active_thumb == thumb:
-                    self._active_thumb = None
-                    self._preview_area.set_style("background-image: none;")
-                thumb.destroy()
+        thumb_to_remove = None
+        for thumb in self._all_thumbs:
+            if thumb.path == path:
+                thumb_to_remove = thumb
                 break
+        if thumb_to_remove:
+            if self._active_thumb == thumb_to_remove:
+                self._active_thumb = None
+                self._preview_image.set_from_pixbuf(None)
+                self._update_preview(None)
+            self._all_thumbs.remove(thumb_to_remove)
+            thumb_to_remove.destroy()
+            self._rebuild_grid()
+            self._on_scroll_changed(self._scroll.get_vadjustment())
+
+    def _on_random_clicked(self, *_):
+        chosen = wallpaper.random_wallpaper(is_hotkey=False)
+        if chosen:
+            self._restore_active(chosen)
+
+    def _on_switcher_clicked(self, *_):
+        try:
+            import bar as _bar
+            if hasattr(_bar, "bar_manager") and _bar.bar_manager:
+                _bar.bar_manager.toggle("WallpaperDrawer")
+        except Exception:
+            pass
+
+    def _on_open_folder_clicked(self, *_):
+        walls_dir = os.path.expanduser("~/.config/agility-shell/wallpapers")
+        os.makedirs(walls_dir, exist_ok=True)
+        Gio.AppInfo.launch_default_for_uri(f"file://{walls_dir}", None)
