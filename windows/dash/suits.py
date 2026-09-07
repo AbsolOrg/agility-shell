@@ -1,5 +1,7 @@
 from __future__ import annotations
 import os
+import math
+import cairo
 from fabric.widgets.box import Box
 from fabric.widgets.button import Button
 from fabric.widgets.label import Label
@@ -31,6 +33,7 @@ class DashSuiteCard(Box):
         theme_cfg = cfg.get("theme", {})
         bars_cfg = cfg.get("bars", [])
         canvas_cfg = cfg.get("desktop_canvas", {})
+        qs_cfg = cfg.get("quickshell_widgets", {})
 
         # Count widgets
         total_bar_widgets = 0
@@ -38,6 +41,12 @@ class DashSuiteCard(Box):
             for b in m.get("bars", []):
                 total_bar_widgets += len(b.get("left", [])) + len(b.get("center", [])) + len(b.get("right", []))
         total_canvas = sum(len(items) for items in canvas_cfg.values()) if isinstance(canvas_cfg, dict) else 0
+
+        qs_enabled = qs_cfg.get("enabled", False)
+        qs_settings = qs_cfg.get("settings", {})
+        qs_vis = qs_settings.get("manager", {}).get("visibility", {})
+        active_qs_count = sum(1 for v in qs_vis.values() if v) if (qs_enabled and isinstance(qs_vis, dict)) else 0
+        qs_badge_str = f"{active_qs_count} widgets" if qs_enabled else "Widgets Off"
 
         theme_name = (theme_cfg.get("dark_theme") if theme_cfg.get("is_dark", True) else theme_cfg.get("light_theme")) or "Default"
         is_dark = theme_cfg.get("is_dark", True)
@@ -93,19 +102,66 @@ class DashSuiteCard(Box):
         pixbuf = get_wallpaper_pixbuf(wp_path, 320, 160)
         if pixbuf:
             img = Gtk.Image.new_from_pixbuf(pixbuf)
-            img_container = Box(
-                style_classes=["dash-suite-thumb"],
-                style="min-width: 310px; min-height: 150px; border-radius: 10px;",
-                children=[img],
-            )
         else:
-            img_container = Box(
-                style_classes=["dash-suite-thumb", "fallback"],
-                style="min-width: 310px; min-height: 150px; border-radius: 10px; background-color: var(--surface_container_high);",
+            img = Box(
+                style="min-width: 310px; min-height: 150px; background-color: var(--surface_container_high);",
                 v_align="center",
                 h_align="center",
                 children=[Icon(icon_name="image-duotone", icon_size=36)],
             )
+
+        # Mini widget silhouette canvas
+        widgets_to_draw = []
+        if qs_enabled and isinstance(qs_settings, dict):
+            for w_key, w_val in qs_settings.items():
+                if w_key == "manager" or not isinstance(w_val, dict):
+                    continue
+                if qs_vis.get(w_key, True) and "x" in w_val and "y" in w_val:
+                    widgets_to_draw.append({
+                        "x": float(w_val.get("x", 0)),
+                        "y": float(w_val.get("y", 0)),
+                        "scale": float(w_val.get("scale", 1.0)),
+                    })
+
+        mini_canvas = Gtk.DrawingArea()
+        mini_canvas.set_size_request(310, 150)
+
+        def _draw_silhouettes(_da, cr):
+            sx = 310.0 / 1920.0
+            sy = 150.0 / 1080.0
+            for w_info in widgets_to_draw:
+                mx = max(6.0, min(270.0, w_info["x"] * sx))
+                my = max(6.0, min(120.0, w_info["y"] * sy))
+                mw = max(18.0, min(65.0, 180.0 * w_info["scale"] * sx))
+                mh = max(12.0, min(42.0, 120.0 * w_info["scale"] * sy))
+
+                cr.save()
+                r = 3.0
+                cr.new_sub_path()
+                cr.arc(mx + mw - r, my + r, r, -math.pi / 2, 0)
+                cr.arc(mx + mw - r, my + mh - r, r, 0, math.pi / 2)
+                cr.arc(mx + r, my + mh - r, r, math.pi / 2, math.pi)
+                cr.arc(mx + r, my + r, r, math.pi, 3 * math.pi / 2)
+                cr.close_path()
+
+                cr.set_source_rgba(0.08, 0.12, 0.18, 0.60)
+                cr.fill_preserve()
+                cr.set_source_rgba(0.48, 0.82, 1.0, 0.75)
+                cr.set_line_width(1.0)
+                cr.stroke()
+                cr.restore()
+
+        mini_canvas.connect("draw", _draw_silhouettes)
+
+        thumb_overlay = Gtk.Overlay()
+        thumb_overlay.add(img)
+        thumb_overlay.add_overlay(mini_canvas)
+
+        img_container = Box(
+            style_classes=["dash-suite-thumb"],
+            style="min-width: 310px; min-height: 150px; border-radius: 10px;",
+            children=[thumb_overlay],
+        )
 
         top_badges_left = Box(
             orientation="h",
@@ -115,7 +171,7 @@ class DashSuiteCard(Box):
             style="margin: 8px;",
             children=[
                 Label(
-                    label=f"{total_bar_widgets} bar • {total_canvas} desktop",
+                    label=f"{total_bar_widgets} bar • {total_canvas} canvas • {qs_badge_str}",
                     style="font-size: 10px; font-weight: 600; padding: 3px 8px; border-radius: 6px; background-color: rgba(0,0,0,0.68); color: #ffffff;",
                 )
             ],
@@ -232,6 +288,14 @@ class DashSuiteCard(Box):
         dup_item.connect("activate", lambda *_: self._on_duplicate(self.suite_id))
         menu.append(dup_item)
 
+        export_item = Gtk.MenuItem()
+        export_box = Box(orientation="h", spacing=8)
+        export_box.add(Icon(icon_name="arrow-square-out-duotone", icon_size=15))
+        export_box.add(Label(label="Export Preset"))
+        export_item.add(export_box)
+        export_item.connect("activate", lambda *_: self._export_desktop())
+        menu.append(export_item)
+
         sep = Gtk.SeparatorMenuItem()
         menu.append(sep)
 
@@ -251,6 +315,32 @@ class DashSuiteCard(Box):
             menu.popup_at_widget(btn, Gdk.Gravity.SOUTH_END, Gdk.Gravity.NORTH_END, None)
         except Exception:
             menu.popup(None, None, None, None, 0, Gtk.get_current_event_time())
+
+    def _export_desktop(self):
+        dialog = Gtk.FileChooserDialog(
+            title="Export Desktop Preset",
+            parent=None,
+            action=Gtk.FileChooserAction.SAVE,
+        )
+        dialog.add_buttons(
+            Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+            Gtk.STOCK_SAVE, Gtk.ResponseType.OK,
+        )
+        clean_name = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in self.suite.get("name", "desktop")).lower()
+        dialog.set_current_name(f"{clean_name}.suit.json")
+        dialog.set_do_overwrite_confirmation(True)
+
+        res = dialog.run()
+        if res == Gtk.ResponseType.OK:
+            dest = dialog.get_filename()
+            dialog.destroy()
+            if dest:
+                if not dest.endswith(".json"):
+                    dest += ".json"
+                if suits_service.export_suite(self.suite_id, dest):
+                    play_sound("widget-placed")
+        else:
+            dialog.destroy()
 
     def _start_rename(self):
         self._editing_name = True
@@ -332,6 +422,20 @@ class DashSuitsPage(Box):
             on_clicked=lambda *_: self._create_new_desktop(),
         )
 
+        import_suite_btn = Button(
+            style_classes=["dash-suite-pin-btn"],
+            child=Box(
+                orientation="h",
+                spacing=8,
+                children=[
+                    Icon(icon_name="arrow-square-in-duotone", icon_size=16),
+                    Label(label="Import", style="font-size: 12.5px; font-weight: 600;"),
+                ],
+            ),
+            tooltip_text="Import a shared desktop preset (.json)",
+            on_clicked=lambda *_: self._import_desktop(),
+        )
+
         header_bar = Box(
             orientation="h",
             spacing=12,
@@ -342,6 +446,7 @@ class DashSuitsPage(Box):
                 title_box,
                 Box(h_expand=True),
                 self._count_badge,
+                import_suite_btn,
                 self._bar_pin_btn,
                 new_suite_btn,
             ],
@@ -486,6 +591,38 @@ class DashSuitsPage(Box):
         new_suite = suits_service.create_suite(clone_active=True)
         play_sound("desktop-switch")
         self._refresh()
+
+    def _import_desktop(self):
+        dialog = Gtk.FileChooserDialog(
+            title="Import Desktop Preset",
+            parent=None,
+            action=Gtk.FileChooserAction.OPEN,
+        )
+        dialog.add_buttons(
+            Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+            Gtk.STOCK_OPEN, Gtk.ResponseType.OK,
+        )
+        filter_json = Gtk.FileFilter()
+        filter_json.set_name("Suit JSON Files (*.json)")
+        filter_json.add_pattern("*.json")
+        dialog.add_filter(filter_json)
+
+        filter_all = Gtk.FileFilter()
+        filter_all.set_name("All Files")
+        filter_all.add_pattern("*")
+        dialog.add_filter(filter_all)
+
+        res = dialog.run()
+        if res == Gtk.ResponseType.OK:
+            src = dialog.get_filename()
+            dialog.destroy()
+            if src:
+                imported = suits_service.import_suite(src)
+                if imported:
+                    play_sound("widget-placed")
+                    self._refresh()
+        else:
+            dialog.destroy()
 
     def _switch_suite(self, suite_id: str):
         if self._dash and hasattr(self._dash, "toggle"):

@@ -4,6 +4,7 @@ import shutil
 import subprocess
 from loguru import logger
 from fabric.core.service import Service, Signal
+from gi.repository import GLib
 from user_options import user_options
 
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -11,8 +12,8 @@ AGILITY_QS_DIR = os.path.join(REPO_DIR, "quickshell", "agility")
 USER_QS_DIR = os.path.expanduser("~/.config/agility-shell/quickshell/agility")
 QS_DIR = AGILITY_QS_DIR if os.path.exists(AGILITY_QS_DIR) else USER_QS_DIR
 
-PRIMARY_SETTINGS_FILE = os.path.expanduser("~/.config/agility-shell/widget_settings.json")
-LEGACY_SETTINGS_FILE = os.path.expanduser("~/.config/quickshell/widget_settings.json")
+PRIMARY_SETTINGS_FILE = os.path.expanduser("~/.config/quickshell/widget_settings.json")
+LEGACY_SETTINGS_FILE = os.path.expanduser("~/.config/agility-shell/widget_settings.json")
 
 AWE_THEMES: list[dict] = [
     {
@@ -112,6 +113,9 @@ class AweService(Service):
     @Signal
     def theme_changed(self, theme_id: str) -> None: ...
 
+    @Signal
+    def settings_changed(self) -> None: ...
+
     _instance = None
 
     @classmethod
@@ -125,8 +129,39 @@ class AweService(Service):
         self._proc: subprocess.Popen | None = None
         self._widgets_visibility: dict[str, bool] = {}
         self._current_theme: str = "liquid_glass"
+        self._last_mtime: float = 0.0
         self._load_visibility()
         self._load_theme()
+        self._update_last_mtime()
+        GLib.timeout_add(400, self._poll_settings_mtime)
+
+    def _update_last_mtime(self) -> None:
+        f = self._get_read_settings_file()
+        if f and os.path.exists(f):
+            try:
+                self._last_mtime = os.path.getmtime(f)
+            except Exception:
+                pass
+
+    def _poll_settings_mtime(self) -> bool:
+        f = self._get_read_settings_file()
+        if not f or not os.path.exists(f):
+            return GLib.SOURCE_CONTINUE
+        try:
+            mt = os.path.getmtime(f)
+            if mt > self._last_mtime:
+                self._last_mtime = mt
+                self._load_visibility()
+                self._load_theme()
+                if f == PRIMARY_SETTINGS_FILE and os.path.exists(PRIMARY_SETTINGS_FILE):
+                    try:
+                        shutil.copy2(PRIMARY_SETTINGS_FILE, LEGACY_SETTINGS_FILE)
+                    except Exception:
+                        pass
+                self.settings_changed()
+        except Exception:
+            pass
+        return GLib.SOURCE_CONTINUE
 
     def is_running(self) -> bool:
         if self._proc is not None:
@@ -289,11 +324,71 @@ class AweService(Service):
                 logger.warning(f"[desktop-widgets] Failed to write settings to {target_path}: {e}")
 
         self.visibility_changed(w_id, visible)
+        self.reload_quickshell()
+        self.settings_changed()
 
     def toggle_widget_visibility(self, widget_id: str) -> bool:
         new_state = not self.get_visibility(widget_id)
         self.set_visibility(widget_id, new_state)
         return new_state
+
+    # ── Full Settings Management ────────────────────────────────────────────
+
+    def get_full_settings(self) -> dict:
+        target_file = self._get_read_settings_file()
+        if target_file and os.path.exists(target_file):
+            try:
+                with open(target_file, "r") as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.warning(f"[desktop-widgets] Error reading full widget settings: {e}")
+
+        default_file = os.path.join(REPO_DIR, "quickshell", "agility", "widget_settings.json")
+        if os.path.exists(default_file):
+            try:
+                with open(default_file, "r") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {}
+
+    def apply_full_settings(self, settings: dict, reload: bool = True) -> None:
+        if not isinstance(settings, dict):
+            return
+
+        for target_path in [PRIMARY_SETTINGS_FILE, LEGACY_SETTINGS_FILE]:
+            try:
+                os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                with open(target_path, "w") as f:
+                    json.dump(settings, f, indent=2)
+            except Exception as e:
+                logger.warning(f"[desktop-widgets] Failed to write settings to {target_path}: {e}")
+
+        vis = settings.get("manager", {}).get("visibility", {})
+        if isinstance(vis, dict):
+            self._widgets_visibility = {str(k).lower(): bool(v) for k, v in vis.items()}
+        theme = settings.get("manager", {}).get("theme")
+        if theme:
+            self._current_theme = str(theme)
+
+        self._update_last_mtime()
+        if reload:
+            self.reload_quickshell()
+
+        self.settings_changed()
+        if theme:
+            self.theme_changed(self._current_theme)
+
+    def reload_quickshell(self) -> None:
+        """Tell Quickshell instance via IPC to reload settings without delay."""
+        try:
+            subprocess.Popen(
+                ["qs", "-p", QS_DIR, "ipc", "call", "suits", "reload"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception as e:
+            logger.debug(f"[desktop-widgets] qs ipc call reload failed: {e}")
 
     # ── Theme Settings Management ───────────────────────────────────────────
 
@@ -338,6 +433,8 @@ class AweService(Service):
                 logger.warning(f"[desktop-widgets] Failed to write theme to {target_path}: {e}")
 
         self.theme_changed(self._current_theme)
+        self.reload_quickshell()
+        self.settings_changed()
 
 
 # Alias for clean naming

@@ -158,6 +158,23 @@ cmd_suits() {
                 die "Usage: agl suits switch <desktop_id>"
             fi
             ;;
+        export)
+            local target="${1:-}"
+            local dest="${2:-}"
+            if [[ -n "$target" && -n "$dest" ]]; then
+                fabric-cli exec agility-shell "suits_service.export_suite('$target', '$dest')" 2>/dev/null || info "Shell not currently running or fabric-cli unavailable."
+            else
+                die "Usage: agl suits export <desktop_id> <dest_file.json>"
+            fi
+            ;;
+        import)
+            local src="${1:-}"
+            if [[ -n "$src" ]]; then
+                fabric-cli exec agility-shell "suits_service.import_suite('$src')" 2>/dev/null || info "Shell not currently running or fabric-cli unavailable."
+            else
+                die "Usage: agl suits import <preset_file.json>"
+            fi
+            ;;
         list|*)
             python3 -c "
 import json, os

@@ -1,4 +1,5 @@
 import cairo
+import time
 from urllib.parse import unquote
 
 import gi
@@ -775,6 +776,132 @@ class DesktopAppletWindow(WaylandWindow):
         self._reposition_all()
         self._overlay.set_opacity(1.0)
         self._overlay.show_all()
+
+    def animate_to_placements(self, new_entries: list[dict], duration: float = 0.40) -> None:
+        """Smoothly morph desktop canvas applets to their new coordinates/visibility on suit switch."""
+        target_map = {e["key"]: e for e in new_entries}
+        current_keys = set(self._children.keys())
+        target_keys = set(target_map.keys())
+
+        # 1. Fade out removed widgets
+        to_remove = current_keys - target_keys
+        for key in to_remove:
+            widget = self._children.pop(key, None)
+            if widget:
+                self._fade_out_and_destroy(widget)
+
+        # 2. Add newly added widgets with initial opacity 0.0 and fade in
+        to_add = target_keys - current_keys
+        for key in to_add:
+            entry = target_map[key]
+            eb = self._build_applet_entry(entry)
+            if eb:
+                px, py = _grid_to_pixel(entry["grid_x"], entry["grid_y"])
+                target_x = self._pad_x + px
+                target_y = self._pad_y + py
+                eb.set_opacity(0.0)
+                self._fixed.put(eb, target_x, target_y)
+                self._children[key] = eb
+                eb.show_all()
+                self._fade_in_widget(eb)
+
+        # 3. Animate moving widgets
+        moving = []
+        for key in (current_keys & target_keys):
+            widget = self._children.get(key)
+            if not widget:
+                continue
+            entry = target_map[key]
+            px, py = _grid_to_pixel(entry["grid_x"], entry["grid_y"])
+            target_x = self._pad_x + px
+            target_y = self._pad_y + py
+            start_x = self._fixed.child_get_property(widget, "x")
+            start_y = self._fixed.child_get_property(widget, "y")
+
+            # Check if size needs update
+            span_x = entry.get("span_x")
+            span_y = entry.get("span_y")
+            w_px, h_px = _applet_pixel_size(key, span_x, span_y)
+            widget.set_size_request(w_px, h_px)
+            overlay = widget.get_child()
+            if overlay:
+                overlay.set_size_request(w_px, h_px)
+
+            if start_x != target_x or start_y != target_y:
+                moving.append({
+                    "widget": widget,
+                    "start_x": start_x,
+                    "start_y": start_y,
+                    "target_x": target_x,
+                    "target_y": target_y,
+                })
+
+        if not moving:
+            GLib.idle_add(self._retrace_blur)
+            return
+
+        start_time = time.time()
+
+        def _step_anim():
+            elapsed = time.time() - start_time
+            t = min(1.0, elapsed / duration)
+            prog = 1.0 - math.pow(1.0 - t, 3)  # OutCubic
+
+            for item in moving:
+                w = item["widget"]
+                if w not in self._children.values():
+                    continue
+                nx = int(item["start_x"] + (item["target_x"] - item["start_x"]) * prog)
+                ny = int(item["start_y"] + (item["target_y"] - item["start_y"]) * prog)
+                self._fixed.move(w, nx, ny)
+
+            if t < 1.0:
+                return GLib.SOURCE_CONTINUE
+
+            # Final snap
+            for item in moving:
+                w = item["widget"]
+                if w in self._children.values():
+                    self._fixed.move(w, item["target_x"], item["target_y"])
+            GLib.idle_add(self._retrace_blur)
+            return GLib.SOURCE_REMOVE
+
+        GLib.timeout_add(16, _step_anim)
+
+    def _fade_out_and_destroy(self, widget: Gtk.Widget, duration: float = 0.25) -> None:
+        start_time = time.time()
+        start_op = widget.get_opacity()
+
+        def _step():
+            elapsed = time.time() - start_time
+            t = min(1.0, elapsed / duration)
+            widget.set_opacity(max(0.0, start_op * (1.0 - t)))
+            if t < 1.0:
+                return GLib.SOURCE_CONTINUE
+            try:
+                self._fixed.remove(widget)
+                widget.destroy()
+            except Exception:
+                pass
+            GLib.idle_add(self._retrace_blur)
+            return GLib.SOURCE_REMOVE
+
+        GLib.timeout_add(16, _step)
+
+    def _fade_in_widget(self, widget: Gtk.Widget, duration: float = 0.35) -> None:
+        start_time = time.time()
+
+        def _step():
+            elapsed = time.time() - start_time
+            t = min(1.0, elapsed / duration)
+            prog = 1.0 - math.pow(1.0 - t, 3)
+            widget.set_opacity(min(1.0, prog))
+            if t < 1.0:
+                return GLib.SOURCE_CONTINUE
+            widget.set_opacity(1.0)
+            return GLib.SOURCE_REMOVE
+
+        GLib.timeout_add(16, _step)
 
     def add_applet(self, key: str, grid_x: int, grid_y: int) -> None:
         if key in self._children:

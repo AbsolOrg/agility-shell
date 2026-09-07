@@ -56,14 +56,25 @@ class SuitsService(Service):
 
         # Register callback on user_options so runtime adjustments auto-sync to active preset
         user_options.register_save_callback(self.sync_from_current)
-        GLib.idle_add(self._setup_wallpaper_listener)
+        GLib.idle_add(self._setup_listeners)
 
     def _capture_current(self) -> dict:
         """Create a deep-copy snapshot of all customizable visual shell state."""
+        quickshell_widgets = {}
+        try:
+            from services.awe_service import AweService
+            quickshell_widgets = {
+                "enabled": getattr(user_options.settings, "awe_widgets_enabled", False),
+                "settings": copy.deepcopy(AweService.get_instance().get_full_settings()),
+            }
+        except Exception as e:
+            logger.debug(f"[SuitsService] error capturing quickshell widgets: {e}")
+
         return {
             "bars": copy.deepcopy(user_options.bars.configs),
             "desktop_canvas": copy.deepcopy(user_options.desktop_canvas.placements),
             "desktop_applets": copy.deepcopy(user_options.desktop_applets.applets),
+            "quickshell_widgets": quickshell_widgets,
             "wallpaper": {
                 "path": user_options.wallpaper.path,
                 "transition_type": getattr(user_options.wallpaper, "transition_type", "random"),
@@ -124,6 +135,15 @@ class SuitsService(Service):
                 self._active_id = data.get("active_id", "")
                 if self._suites and not any(s["id"] == self._active_id for s in self._suites):
                     self._active_id = self._suites[0]["id"]
+                # Seamless migration: ensure all existing presets have quickshell_widgets key
+                migrated = False
+                for s in self._suites:
+                    cfg = s.setdefault("config", {})
+                    if "quickshell_widgets" not in cfg:
+                        cfg["quickshell_widgets"] = self._capture_current().get("quickshell_widgets", {})
+                        migrated = True
+                if migrated:
+                    self._save()
                 logger.info(f"[SuitsService] loaded {len(self._suites)} suites from {SUITS_FILE}")
                 return
             except Exception as e:
@@ -156,6 +176,11 @@ class SuitsService(Service):
         except Exception as e:
             logger.error(f"[SuitsService] failed to save suites: {e}")
 
+    def _setup_listeners(self):
+        self._setup_wallpaper_listener()
+        self._setup_widgets_listener()
+        return GLib.SOURCE_REMOVE
+
     def _setup_wallpaper_listener(self):
         try:
             from services.wallpaper import WallpaperService
@@ -163,6 +188,16 @@ class SuitsService(Service):
             wp.connect("wallpaper-changed", lambda _svc, path: self._on_wallpaper_changed(path))
         except Exception as e:
             logger.debug(f"[SuitsService] deferred wallpaper service connection: {e}")
+        return GLib.SOURCE_REMOVE
+
+    def _setup_widgets_listener(self):
+        try:
+            from services.awe_service import AweService
+            svc = AweService.get_instance()
+            svc.connect("settings-changed", lambda *_: self.sync_from_current())
+            svc.connect("status-changed", lambda *_: self.sync_from_current())
+        except Exception as e:
+            logger.debug(f"[SuitsService] deferred widgets service connection: {e}")
         return GLib.SOURCE_REMOVE
 
     def _on_wallpaper_changed(self, path: str):
@@ -328,14 +363,25 @@ class SuitsService(Service):
             self._is_switching = False
             self.switching_finished(suite_id)
 
-        try:
-            # Trigger the vertical strip melt animation!
-            play_doom_melt_transition(on_switch=_do_switch, on_finish=_on_finish)
-        except Exception as e:
-            self._is_switching = False
-            logger.error(f"[SuitsService] transition failed: {e}")
-            _do_switch()
-            _on_finish()
+        transition_mode = getattr(user_options.settings, "suits_transition", "fluid")
+        if transition_mode == "doom":
+            from windows.suits_transition import play_doom_melt_transition
+            try:
+                play_doom_melt_transition(on_switch=_do_switch, on_finish=_on_finish)
+            except Exception as e:
+                self._is_switching = False
+                logger.error(f"[SuitsService] transition failed: {e}")
+                _do_switch()
+                _on_finish()
+        else:
+            # Fluid morphing transition: widgets smoothly glide across screen without curtain
+            try:
+                _do_switch()
+                GLib.timeout_add(450, _on_finish)
+            except Exception as e:
+                self._is_switching = False
+                logger.error(f"[SuitsService] fluid switch failed: {e}")
+                _on_finish()
 
         return True
 
@@ -346,6 +392,18 @@ class SuitsService(Service):
             user_options.desktop_canvas.placements = copy.deepcopy(cfg["desktop_canvas"])
         if "desktop_applets" in cfg:
             user_options.desktop_applets.applets = copy.deepcopy(cfg["desktop_applets"])
+
+        if "quickshell_widgets" in cfg:
+            qs_data = cfg["quickshell_widgets"]
+            enabled = bool(qs_data.get("enabled", False))
+            setattr(user_options.settings, "awe_widgets_enabled", enabled)
+            qs_settings = qs_data.get("settings", {})
+            if qs_settings:
+                try:
+                    from services.awe_service import AweService
+                    AweService.get_instance().apply_full_settings(qs_settings, reload=False)
+                except Exception as e:
+                    logger.debug(f"[SuitsService] error applying quickshell snapshot: {e}")
 
         if "wallpaper" in cfg:
             for k, v in cfg["wallpaper"].items():
@@ -378,13 +436,12 @@ class SuitsService(Service):
         from services.wallpaper import WallpaperService
         from services.desktop_applets import DesktopAppletService
 
-        # A. Apply Wallpaper (instant, under the Doom melt overlay)
+        # A. Apply Wallpaper
         wp_cfg = cfg.get("wallpaper", {})
         wp_path = wp_cfg.get("path") or user_options.wallpaper.path
         if wp_path and os.path.exists(wp_path):
             try:
                 wp_service = WallpaperService.get_instance()
-                # Use transition_type="none" so awww does NOT run competing animations!
                 wp_service.set_wallpaper(wp_path, transition_type="none")
             except Exception as wp_err:
                 logger.error(f"[SuitsService] wallpaper transition failed: {wp_err}")
@@ -411,11 +468,39 @@ class SuitsService(Service):
         except Exception as th_err:
             logger.error(f"[SuitsService] theme transition failed: {th_err}")
 
-        # C. Desktop Canvas Applets Rebuild
+        # C1. Quickshell Desktop Widgets (Fluid Morph)
+        try:
+            from services.awe_service import AweService
+            awe_svc = AweService.get_instance()
+            qs_cfg = cfg.get("quickshell_widgets", {})
+            enabled = qs_cfg.get("enabled", getattr(user_options.settings, "awe_widgets_enabled", False))
+            full_settings = qs_cfg.get("settings", {})
+            if full_settings:
+                awe_svc.apply_full_settings(full_settings, reload=False)
+
+            if enabled:
+                if not awe_svc.is_running():
+                    awe_svc.start()
+                else:
+                    awe_svc.reload_quickshell()
+            else:
+                if awe_svc.is_running():
+                    fade_out_settings = copy.deepcopy(full_settings) if full_settings else {}
+                    mgr = fade_out_settings.setdefault("manager", {})
+                    mgr["visibility"] = {k: False for k in awe_svc._widgets_visibility.keys()}
+                    awe_svc.apply_full_settings(fade_out_settings, reload=True)
+                    GLib.timeout_add(450, lambda: awe_svc.stop() if not getattr(user_options.settings, "awe_widgets_enabled", False) else None)
+        except Exception as qs_err:
+            logger.error(f"[SuitsService] quickshell widgets transition failed: {qs_err}")
+
+        # C2. Desktop Canvas Applets Rebuild & Glide
         try:
             applet_service = DesktopAppletService.get_instance()
             for win in list(applet_service._windows.values()):
-                win.rebuild()
+                if hasattr(win, "animate_to_placements"):
+                    win.animate_to_placements(user_options.desktop_canvas.get_applets(win._monitor_id))
+                else:
+                    win.rebuild()
             applet_service.apply_desktop_widget_opacity(user_options.settings.desktop_widget_opacity)
         except Exception as ap_err:
             logger.error(f"[SuitsService] canvas update failed: {ap_err}")
@@ -445,6 +530,58 @@ class SuitsService(Service):
             play_sound("desktop-switch")
         except Exception:
             pass
+
+    def export_suite(self, suite_id: str, dest_path: str) -> bool:
+        suite = self.get_suite(suite_id)
+        if not suite:
+            logger.error(f"[SuitsService] export failed: suite {suite_id} not found")
+            return False
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(dest_path)), exist_ok=True)
+            export_payload = {
+                "agility_preset_version": 1,
+                "exported_at": time.time(),
+                "suite": copy.deepcopy(suite),
+            }
+            with open(dest_path, "w") as f:
+                json.dump(export_payload, f, indent=2)
+            logger.info(f"[SuitsService] exported suite '{suite.get('name')}' to {dest_path}")
+            return True
+        except Exception as e:
+            logger.error(f"[SuitsService] error exporting suite {suite_id}: {e}")
+            return False
+
+    def import_suite(self, src_path: str) -> dict | None:
+        if not os.path.isfile(src_path):
+            logger.error(f"[SuitsService] import failed: file not found at {src_path}")
+            return None
+        try:
+            with open(src_path, "r") as f:
+                payload = json.load(f)
+            suite_data = payload.get("suite") or payload
+            new_id = f"desktop-{int(time.time() * 1000)}"
+            base_name = suite_data.get("name", "Imported Preset")
+            existing_names = {s.get("name", "") for s in self._suites}
+            name = base_name
+            counter = 1
+            while name in existing_names:
+                name = f"{base_name} ({counter})"
+                counter += 1
+
+            new_suite = {
+                "id": new_id,
+                "name": name,
+                "created_at": time.time(),
+                "config": copy.deepcopy(suite_data.get("config", {})),
+            }
+            self._suites.append(new_suite)
+            self._save()
+            self.suites_changed()
+            logger.info(f"[SuitsService] imported suite '{name}' ({new_id}) from {src_path}")
+            return new_suite
+        except Exception as e:
+            logger.error(f"[SuitsService] error importing suite from {src_path}: {e}")
+            return None
 
     def cycle_next_suite(self) -> None:
         if len(self._suites) <= 1:
