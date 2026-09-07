@@ -74,6 +74,8 @@ singletons.bar_manager = bar_manager
 wallpaper_service = WallpaperService.get_instance()
 # wallpaper_service.set_bar_manager(bar_manager)
 
+from services.suits_service import SuitsService, suits_service
+
 AweService.get_instance().init_startup()
 
 play_sound("session-start")

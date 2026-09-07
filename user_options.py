@@ -19,7 +19,7 @@ class UserOptions:
             self.hover_widgets = [
                 "Dash", "Launcher", "SysMon", "Processes", "Clipboard", "Caffeine", "NightLight",
                 "Media", "Weather", "Volume", "Brightness", "Energy", "Wifi", "Bluetooth",
-                "Clock", "Calendar", "Notifications", "Settings", "Tray", "Calculator", "Keyboard", "Screenshot", "Session"
+                "Clock", "Calendar", "Notifications", "Settings", "Tray", "Calculator", "Keyboard", "Screenshot", "Session", "Suits"
             ]
             self.bar_theme = "default"
             self.bar_blur = True
@@ -60,6 +60,7 @@ class UserOptions:
                                 "Tray",
                                 "Calendar",
                                 {"widget": "Clock", "variant": "icon+label"},
+                                "Suits",
                                 {"widget": "Settings", "variant": "single"},
                                 "Notifications"
                             ]
@@ -342,6 +343,7 @@ class UserOptions:
         self.wallpaper = self.Wallpaper()
         self.desktop_applets = self.DesktopApplets()
         self.desktop_canvas = self.DesktopCanvas()
+        self._save_callbacks = []
         self._load()
 
     def _load(self) -> None:
@@ -399,8 +401,22 @@ class UserOptions:
 
             logger.info(f"[UserOptions] saved config to {CONFIG_PATH}")
 
+            for cb in list(self._save_callbacks):
+                try:
+                    cb()
+                except Exception as cb_err:
+                    logger.error(f"[UserOptions] save callback error: {cb_err}")
+
         except Exception as e:
             logger.error(f"[UserOptions] failed to save config: {e}")
+
+    def register_save_callback(self, cb) -> None:
+        if cb not in self._save_callbacks:
+            self._save_callbacks.append(cb)
+
+    def unregister_save_callback(self, cb) -> None:
+        if cb in self._save_callbacks:
+            self._save_callbacks.remove(cb)
 
 
 user_options = UserOptions()

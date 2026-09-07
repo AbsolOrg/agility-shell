@@ -12,8 +12,9 @@ from user_options import user_options
 from desktop_applets import DESKTOP_APPLET_SIZES
 import cairo
 
-ALL_BEAN_DATA: list[tuple[str, str]] = getattr(bar, "ALL_BEAN_DATA", [
+ALL_BEAN_DATA: list[tuple[str, str]] = [
     ("agility-duotone",                 "Dash"),
+    ("suits-duotone",                   "Suits"),
     ("magnifying-glass-duotone",        "Launcher"),
     ("dock-duotone",                    "Dock"),
     ("cards-three-duotone",             "Workspaces"),
@@ -39,7 +40,7 @@ ALL_BEAN_DATA: list[tuple[str, str]] = getattr(bar, "ALL_BEAN_DATA", [
     ("bluetooth-duotone",               "Bluetooth"),
     ("speaker-simple-high-duotone",     "Volume"),
     ("seal-duotone",                    "Brightness"),
-])
+]
 
 
 def create_dash_drag_surface(icon_name: str, key: str) -> cairo.ImageSurface:

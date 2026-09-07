@@ -5,6 +5,7 @@ from fabric.widgets.stack import Stack
 from .launcher import DashLauncherPage
 from .applets import DashAppletPage, AppletDropZone
 from .widgets import DashWidgetsPage
+from .suits import DashSuitsPage
 from .components import DashGroup, DashHeader
 from .settings import DashSettingsPage
 from gi.repository import Gtk, Gdk, GLib, GtkLayerShell
@@ -24,6 +25,7 @@ _PAGE_META = {
     "apps":       ("diamonds-four-duotone",      "Apps"),
     "applets":    ("stack-duotone",              "Applets"),
     "widgets":    ("puzzle-piece-duotone",       "Widgets"),
+    "suits":      ("suits-duotone",              "Suits"),
     "settings":   ("gear-six-duotone",           "Settings"),
     "wallpapers": ("images-duotone",             "Wallpapers"),
 }
@@ -31,12 +33,13 @@ _PAGE_LABELS = {
     "apps":       "Apps",
     "applets":    "Applets",
     "widgets":    "Widgets",
+    "suits":      "Suits",
     "settings":   "Settings",
     "wallpapers": "Wallpapers",
 }
 
 _PAGES_WITH_SEARCH = {"apps", "applets", "widgets"}
-_PRIMARY_PAGES = {"apps", "applets", "widgets", "settings"}
+_PRIMARY_PAGES = {"apps", "applets", "widgets", "suits", "settings"}
 _SECONDARY_PAGES = {"wallpapers"}
 
 
@@ -173,6 +176,7 @@ class Dash(Window):
             on_applet_drag_end=self._on_applet_drag_end,
         )
         self.widgets    = DashWidgetsPage(self, bar_manager=bar_manager)
+        self.suits      = DashSuitsPage(self)
         self.settings   = DashSettingsPage(bar_manager=bar_manager)
         self.wallpapers = DashWallpaperPage()
         self.dismiss_layer = DashDismissLayer(
@@ -186,6 +190,7 @@ class Dash(Window):
         self.h_group_1.add_named(self.launcher,   "apps")
         self.h_group_1.add_named(self.applets,    "applets")
         self.h_group_1.add_named(self.widgets,    "widgets")
+        self.h_group_1.add_named(self.suits,      "suits")
         self.h_group_1.add_named(self.settings,   "settings")
         self.h_group_2.add_named(self.wallpapers, "wallpapers")
         self.v_stack.add_named(self.h_group_2,    "wallpapers")
@@ -196,6 +201,7 @@ class Dash(Window):
             "apps":       self.launcher,
             "applets":    self.applets,
             "widgets":    self.widgets,
+            "suits":      self.suits,
             "settings":   self.settings,
             "wallpapers": self.wallpapers,
         }
@@ -322,6 +328,8 @@ class Dash(Window):
                 return "applets"
             elif child is self.widgets:
                 return "widgets"
+            elif child is self.suits:
+                return "suits"
             elif child is self.settings:
                 return "settings"
             return "apps"
@@ -336,6 +344,7 @@ class Dash(Window):
             ("apps", "diamonds-four-duotone", "Apps", lambda: self.h_group_1.set_visible_child_name("apps")),
             ("applets", "stack-duotone", "Applets", lambda: self.h_group_1.set_visible_child_name("applets")),
             ("widgets", "puzzle-piece-duotone", "Widgets", lambda: self.h_group_1.set_visible_child_name("widgets")),
+            ("suits", "suits-duotone", "Suits", lambda: self.h_group_1.set_visible_child_name("suits")),
             ("settings", "gear-six-duotone", "Settings", lambda: self.h_group_1.set_visible_child_name("settings")),
         ]
 
@@ -446,6 +455,12 @@ class Dash(Window):
 
     def toggle_widgets(self, active_monitor=None):
         self.h_group_1.set_visible_child(self.widgets)
+        self.v_stack.set_visible_child(self.h_group_1)
+        if not self.is_visible():
+            self.toggle(active_monitor)
+
+    def toggle_suits(self, active_monitor=None):
+        self.h_group_1.set_visible_child(self.suits)
         self.v_stack.set_visible_child(self.h_group_1)
         if not self.is_visible():
             self.toggle(active_monitor)

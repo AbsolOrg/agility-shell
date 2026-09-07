@@ -12,7 +12,7 @@ from bar_widgets import (
     CPUIndicatorButton, NetworkButton, NotificationButton, Workspaces,
     NiriClientTitle, Media, QuickSettingsButton, WeatherButton, VolumeButton,
     CalculatorButton, SessionButton, KeyboardButton, ScreenshotButton, SystemTray, Dock, BrightnessButton, DashButton,
-    ClipboardButton, CaffeineButton, SysMonButton, NightLightButton
+    ClipboardButton, CaffeineButton, SysMonButton, NightLightButton, SuitsButton
 )
 from user_options import user_options
 from services.singletons import edit_mode, wm, toggleable_windows
@@ -31,6 +31,7 @@ from windows.standalone_menus import (
 from windows.notifications import NotificationWindow
 from windows.osd import OSD
 from windows.clipboard import ClipboardApplet
+from windows.suits import SuitsApplet
 from windows.wallpaper_picker import WallpaperPicker
 from windows.wallpaper_drawer import WallpaperDrawer
 from snippets.popupwindow import PopupWindow
@@ -64,6 +65,7 @@ BAR_WIDGETS: dict[str, type] = {
     "Caffeine":      CaffeineButton,
     "SysMon":        SysMonButton,
     "NightLight":    NightLightButton,
+    "Suits":         SuitsButton,
 }
 
 APPLET_WIDGETS: dict[str, type] = {
@@ -84,6 +86,7 @@ APPLET_WIDGETS: dict[str, type] = {
     "Launcher":      LauncherApplet,
     "Processes":     ProcessMonitorApplet,
     "Clipboard":     ClipboardApplet,
+    "Suits":         SuitsApplet,
 }
 
 INCOMPATIBLE_GROUPS: set[frozenset] = {
@@ -100,6 +103,7 @@ from plugin_loader import load_plugins
 
 ALL_BEAN_DATA: list[tuple[str, str]] = [
     ("agility-duotone",                 "Dash"),
+    ("suits-duotone",                   "Suits"),
     ("magnifying-glass-duotone",        "Launcher"),
     ("dock-duotone",                    "Dock"),
     ("cards-three-duotone",             "Workspaces"),

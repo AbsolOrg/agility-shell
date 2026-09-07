@@ -11,32 +11,12 @@ Item {
     property string currentTheme: "liquid_glass"
 
     // Widget visibility states (managed directly by Agility Shell)
-    property var widgetVisibility: ({
-        clock: true,
-        poster: true,
-        calendar: true,
-        media: true,
-        sysinfo: true,
-        battery: true,
-        weather: true,
-        quickcontrols: true,
-        network: true,
-        notes: true,
-        todo: true,
-        timer: true,
-        thermal: true,
-        quote: true,
-        clipboard: true,
-        crypto: true,
-        worldclock: true,
-        git: true,
-        resourcewheel: true,
-        visualizer: true,
-        habits: true,
-        ping: true,
-        storagemap: true,
-        calc: true
-    })
+    property bool isLoaded: false
+    property var widgetVisibility: ({})
+
+    function isWidgetVisible(key) {
+        return root.isLoaded && (root.widgetVisibility[key] === true)
+    }
 
     // Theme metadata list for UI pickers
     readonly property var themes: [
@@ -246,23 +226,73 @@ Item {
     // Legacy glassGloss kept for compatibility (transparent to prevent straight-line cuts)
     readonly property color glassGloss: "transparent"
 
-    // ─── Settings Persistence ───
+    // ─── Settings Persistence & Animations ───
+    property var allSettings: ({})
+    property int reloadVersion: 0
+    property bool isSwitching: false
+    signal settingsUpdated()
+
+    Timer {
+        id: switchAnimTimer
+        interval: 650
+        repeat: false
+        onTriggered: {
+            root.isSwitching = false
+        }
+    }
+
+    function triggerPresetSwitch() {
+        root.isSwitching = true
+        switchAnimTimer.restart()
+    }
+
+    function reloadSettings() {
+        root.triggerPresetSwitch()
+        if (!loadSettingsProc.running) {
+            loadSettingsProc.running = true
+        }
+    }
+
+    function applyWidgetConfig(widget, key) {
+        if (!widget || !key || !root.allSettings || !root.allSettings[key]) return
+        var cfg = root.allSettings[key]
+        if (cfg.scale !== undefined && widget.scaleFactor !== undefined) {
+            widget.scaleFactor = Math.max(0.5, Math.min(2.5, cfg.scale))
+        }
+        var targetW = widget.width
+        var targetH = widget.height
+        if (cfg.x !== undefined) {
+            var newX = Math.max(10, Math.min(widget.screenWidth - targetW - 10, cfg.x))
+            widget.x = newX
+            if (widget.posX !== undefined) widget.posX = newX
+        }
+        if (cfg.y !== undefined) {
+            var newY = Math.max(10, Math.min(widget.screenHeight - targetH - 10, cfg.y))
+            widget.y = newY
+            if (widget.posY !== undefined) widget.posY = newY
+        }
+    }
+
     Process {
         id: loadSettingsProc
-        command: ["sh", "-c", "cat ~/.config/agility-shell/widget_settings.json 2>/dev/null || cat ~/.config/quickshell/widget_settings.json 2>/dev/null || echo '{}'"]
+        command: ["sh", "-c", "cat ~/.config/quickshell/widget_settings.json 2>/dev/null || cat ~/.config/agility-shell/widget_settings.json 2>/dev/null || echo '{}'"]
         running: false
         stdout: StdioCollector {
             onStreamFinished: {
                 try {
                     var data = JSON.parse(text)
+                    root.allSettings = data
                     if (data.manager) {
                         if (data.manager.theme) {
                             root.currentTheme = data.manager.theme
                         }
-                        if (data.manager.visibility !== undefined) {
-                            root.widgetVisibility = Object.assign({}, root.widgetVisibility, data.manager.visibility)
+                        if (data.manager.visibility !== undefined && typeof data.manager.visibility === "object") {
+                            root.widgetVisibility = Object.assign({}, data.manager.visibility)
                         }
                     }
+                    root.isLoaded = true
+                    root.reloadVersion += 1
+                    root.settingsUpdated()
                 } catch (e) {}
             }
         }
@@ -271,6 +301,27 @@ Item {
     Process {
         id: saveSettingsProc
         running: false
+    }
+
+    function saveWidgetConfig(widgetName, configObj) {
+        if (!widgetName || !configObj) return
+        var script = "python3 -c '\n" +
+            "import json, os, subprocess\n" +
+            "for p in [os.path.expanduser(\"~/.config/agility-shell/widget_settings.json\"), os.path.expanduser(\"~/.config/quickshell/widget_settings.json\")]:\n" +
+            "    try:\n" +
+            "        os.makedirs(os.path.dirname(p), exist_ok=True)\n" +
+            "        d = json.load(open(p)) if os.path.exists(p) else {}\n" +
+            "        d[\"" + widgetName + "\"] = json.loads(\"\"\"" + JSON.stringify(configObj) + "\"\"\")\n" +
+            "        open(p, \"w\").write(json.dumps(d, indent=2))\n" +
+            "    except Exception:\n" +
+            "        pass\n" +
+            "try:\n" +
+            "    subprocess.run([\"fabric-cli\", \"exec\", \"agility-shell\", \"suits_service.sync_from_current()\"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=0.5)\n" +
+            "except Exception:\n" +
+            "    pass\n" +
+            "'"
+        saveSettingsProc.command = ["sh", "-c", script]
+        saveSettingsProc.running = true
     }
 
     function setTheme(newTheme) {
@@ -313,11 +364,11 @@ Item {
 
     // Watcher to keep theme & visibility in sync with Agility Shell Dash
     Timer {
-        interval: 1000
+        interval: 1500
         running: true
         repeat: true
         onTriggered: {
-            if (!loadSettingsProc.running && !saveSettingsProc.running) {
+            if (!loadSettingsProc.running && !saveSettingsProc.running && !root.isSwitching) {
                 loadSettingsProc.running = true
             }
         }
